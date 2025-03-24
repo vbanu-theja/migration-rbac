@@ -55,7 +55,6 @@ func migrateTable(sourceDB, destDB *sql.DB, tableName string) error {
 	}
 
 	log.Printf("Migrating data for table: %s", tableName)
-	// Copy data
 	rows, err := sourceDB.Query(fmt.Sprintf("SELECT * FROM %s", tableName))
 	if err != nil {
 		return fmt.Errorf("error querying data from table %s: %v", tableName, err)
@@ -96,6 +95,12 @@ func getTableSchema(db *sql.DB, tableName string) (string, error) {
 		return "", err
 	}
 
+	// Check if the table is 'roles' and modify the schema accordingly
+	if tableName == "roles" {
+		additionalColumns := ", `created_by` varchar(255), `updated_by` varchar(255), `type` enum('BILLING', 'STANDARD', 'CUSTOM') NOT NULL DEFAULT 'STANDARD', `team_id` char(36)"
+		columns += additionalColumns
+	}
+
 	// Retrieve primary key
 	primaryKey, err := getPrimaryKey(db, tableName)
 	if err != nil {
@@ -118,6 +123,11 @@ func getTableSchema(db *sql.DB, tableName string) (string, error) {
 	foreignKeys, err := getForeignKeys(db, tableName)
 	if err != nil {
 		return "", err
+	}
+
+	// Add a foreign key for 'roles' table specifically
+	if tableName == "roles" {
+		foreignKeys = append(foreignKeys, "CONSTRAINT `fk_roles_team_id` FOREIGN KEY (`team_id`) REFERENCES `team` (`id`)")
 	}
 
 	// Construct the full table schema
