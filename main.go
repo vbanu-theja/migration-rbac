@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 )
 
@@ -37,7 +38,14 @@ func main() {
 			log.Fatalf("Failed to migrate table %s: %v", table, err)
 		}
 		log.Printf("Successfully migrated table: %s", table)
+		log.Println(" ")
 	}
+
+	log.Println("Starting to insert specific roles for each team...")
+	if err := insertRolesForTeams(destDB); err != nil {
+		log.Fatalf("Failed to insert roles for teams: %v", err)
+	}
+	log.Println("Successfully inserted roles for all teams.")
 }
 
 func migrateTable(sourceDB, destDB *sql.DB, tableName string) error {
@@ -85,6 +93,71 @@ func migrateTable(sourceDB, destDB *sql.DB, tableName string) error {
 		}
 	}
 
+	return nil
+}
+
+func insertRolesForTeams(db *sql.DB) error {
+	if _, err := db.Exec("DELETE FROM roles"); err != nil {
+		return fmt.Errorf("error clearing roles table: %v", err)
+	}
+
+	log.Println("Fetching all team IDs from the team table...")
+	rows, err := db.Query("SELECT id FROM team")
+	if err != nil {
+		return fmt.Errorf("error fetching team ids: %v", err)
+	}
+	defer rows.Close()
+
+	log.Println("Preparing statement for inserting roles...")
+	stmt, err := db.Prepare(`INSERT INTO roles (id, name, type, team_id) VALUES (?, ?, ?, ?)`)
+	if err != nil {
+		return fmt.Errorf("error preparing insert statement: %v", err)
+	}
+	defer stmt.Close()
+
+	var count int
+	for rows.Next() {
+		var teamId string
+		if err := rows.Scan(&teamId); err != nil {
+			return fmt.Errorf("error scanning team id: %v", err)
+		}
+
+		log.Printf("Inserting roles for team ID: %s\n", teamId)
+		if err := insertRole(stmt, "BI_ADMIN", "BILLING", nil); err != nil {
+			return err
+		}
+		if err := insertRole(stmt, "TEAM_ADMIN", "STANDARD", &teamId); err != nil {
+			return err
+		}
+		if err := insertRole(stmt, "USER", "STANDARD", &teamId); err != nil {
+			return err
+		}
+		count += 3
+	}
+
+	log.Printf("Inserted a total of %d roles for all teams.\n", count)
+	return nil
+}
+
+func insertRole(stmt *sql.Stmt, name string, roleType string, teamId *string) error {
+	newUUID, err := uuid.NewRandom()
+	if err != nil {
+		return fmt.Errorf("error generating UUID: %v", err)
+	}
+
+	var result sql.Result
+	if teamId == nil {
+		result, err = stmt.Exec(newUUID.String(), name, roleType, nil)
+	} else {
+		result, err = stmt.Exec(newUUID.String(), name, roleType, *teamId)
+	}
+
+	if err != nil {
+		return fmt.Errorf("error inserting role: %v", err)
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	log.Printf("Inserted role: %s, Type: %s, Team ID: %v, Rows affected: %d\n", name, roleType, teamId, rowsAffected)
 	return nil
 }
 
