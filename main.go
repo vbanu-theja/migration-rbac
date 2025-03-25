@@ -46,6 +46,19 @@ func main() {
 		log.Fatalf("Failed to insert roles for teams: %v", err)
 	}
 	log.Println("Successfully inserted roles for all teams.")
+
+	// if err := fetchAndDisplayUserRoles(sourceDB); err != nil {
+	// 	log.Fatalf("Failed to fetch user roles information: %v", err)
+	// }
+
+	if err := ensureUserRolesMappingTableExists(destDB); err != nil {
+		log.Fatalf("Failed to ensure user_roles_mapping table exists: %v", err)
+	}
+
+	log.Println("Fetching user roles information from source database...")
+	if err := fetchAndInsertUserRoles(sourceDB, destDB); err != nil {
+		log.Fatalf("Failed to fetch and insert user roles information: %v", err)
+	}
 }
 
 func migrateTable(sourceDB, destDB *sql.DB, tableName string) error {
@@ -56,7 +69,7 @@ func migrateTable(sourceDB, destDB *sql.DB, tableName string) error {
 		return fmt.Errorf("error getting schema for table %s: %v", tableName, err)
 	}
 
-	log.Printf("Creating table %s in destination database with schema: %s", tableName, schema)
+	// log.Printf("Creating table %s in destination database with schema: %s", tableName, schema)
 	_, err = destDB.Exec(fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (%s)", tableName, schema))
 	if err != nil {
 		return fmt.Errorf("error creating table %s in destination database: %v", tableName, err)
@@ -102,14 +115,14 @@ func insertRolesForTeams(db *sql.DB) error {
 	}
 
 	log.Println("Fetching all team IDs from the team table...")
-	rows, err := db.Query("SELECT id FROM team")
+	rows, err := db.Query("SELECT id, billing_id FROM team")
 	if err != nil {
 		return fmt.Errorf("error fetching team ids: %v", err)
 	}
 	defer rows.Close()
 
 	log.Println("Preparing statement for inserting roles...")
-	stmt, err := db.Prepare(`INSERT INTO roles (id, name, type, team_id) VALUES (?, ?, ?, ?)`)
+	stmt, err := db.Prepare(`INSERT INTO roles (id, name, type, team_id, billing_id) VALUES (?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("error preparing insert statement: %v", err)
 	}
@@ -118,18 +131,19 @@ func insertRolesForTeams(db *sql.DB) error {
 	var count int
 	for rows.Next() {
 		var teamId string
-		if err := rows.Scan(&teamId); err != nil {
+		var billingId string
+		if err := rows.Scan(&teamId, &billingId); err != nil {
 			return fmt.Errorf("error scanning team id: %v", err)
 		}
 
 		log.Printf("Inserting roles for team ID: %s\n", teamId)
-		if err := insertRole(stmt, "BI_ADMIN", "BILLING", nil); err != nil {
+		if err := insertRole(stmt, "BI_ADMIN", "BILLING", nil, &billingId); err != nil {
 			return err
 		}
-		if err := insertRole(stmt, "TEAM_ADMIN", "STANDARD", &teamId); err != nil {
+		if err := insertRole(stmt, "PLATFORM_ADMIN", "STANDARD", &teamId, &billingId); err != nil {
 			return err
 		}
-		if err := insertRole(stmt, "USER", "STANDARD", &teamId); err != nil {
+		if err := insertRole(stmt, "PLATFORM_READ_ONLY", "STANDARD", &teamId, &billingId); err != nil {
 			return err
 		}
 		count += 3
@@ -139,7 +153,7 @@ func insertRolesForTeams(db *sql.DB) error {
 	return nil
 }
 
-func insertRole(stmt *sql.Stmt, name string, roleType string, teamId *string) error {
+func insertRole(stmt *sql.Stmt, name string, roleType string, teamId *string, billingId *string) error {
 	newUUID, err := uuid.NewRandom()
 	if err != nil {
 		return fmt.Errorf("error generating UUID: %v", err)
@@ -147,9 +161,9 @@ func insertRole(stmt *sql.Stmt, name string, roleType string, teamId *string) er
 
 	var result sql.Result
 	if teamId == nil {
-		result, err = stmt.Exec(newUUID.String(), name, roleType, nil)
+		result, err = stmt.Exec(newUUID.String(), name, roleType, nil, *billingId)
 	} else {
-		result, err = stmt.Exec(newUUID.String(), name, roleType, *teamId)
+		result, err = stmt.Exec(newUUID.String(), name, roleType, *teamId, *billingId)
 	}
 
 	if err != nil {
@@ -161,6 +175,138 @@ func insertRole(stmt *sql.Stmt, name string, roleType string, teamId *string) er
 	return nil
 }
 
+func ensureUserRolesMappingTableExists(db *sql.DB) error {
+	createTableQuery := `
+    CREATE TABLE IF NOT EXISTS user_roles_mapping (
+        user_id CHAR(36) NOT NULL,
+        role_id CHAR(36) NOT NULL,
+        PRIMARY KEY (user_id, role_id),
+        FOREIGN KEY (user_id) REFERENCES users(id),
+        FOREIGN KEY (role_id) REFERENCES roles(id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
+	_, err := db.Exec(createTableQuery)
+	if err != nil {
+		return fmt.Errorf("error creating user_roles_mapping table: %v", err)
+	}
+	log.Println("Ensured user_roles_mapping table exists.")
+	return nil
+}
+
+func fetchAndDisplayUserRoles(db *sql.DB) error {
+	rows, err := db.Query("SELECT id FROM billing_account")
+	if err != nil {
+		return fmt.Errorf("error fetching billing_account ids: %v", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var billingId string
+		if err := rows.Scan(&billingId); err != nil {
+			return fmt.Errorf("error scanning billing_account id: %v", err)
+		}
+
+		// For each billing_id, get all associated user_ids from users table
+		userRows, err := db.Query("SELECT id FROM users WHERE billing_id = ?", billingId)
+		if err != nil {
+			return fmt.Errorf("error fetching user ids for billing_id %s: %v", billingId, err)
+		}
+		defer userRows.Close()
+
+		for userRows.Next() {
+			var userId string
+			if err := userRows.Scan(&userId); err != nil {
+				return fmt.Errorf("error scanning user id: %v", err)
+			}
+
+			// For each user_id, get role_id and team_id from users_role table
+			roleRows, err := db.Query("SELECT role_id, team_id FROM users_role WHERE user_id = ?", userId)
+			if err != nil {
+				return fmt.Errorf("error fetching role and team ids for user_id %s: %v", userId, err)
+			}
+			defer roleRows.Close()
+
+			for roleRows.Next() {
+				var roleId, teamId string
+				if err := roleRows.Scan(&roleId, &teamId); err != nil {
+					return fmt.Errorf("error scanning role and team ids: %v", err)
+				}
+
+				// Get the name associated with that role_id from roles table
+				var roleName string
+				err = db.QueryRow("SELECT name FROM roles WHERE id = ?", roleId).Scan(&roleName)
+				if err != nil {
+					return fmt.Errorf("error fetching role name for role_id %s: %v", roleId, err)
+				}
+
+				// Print the fetched information
+				fmt.Printf("Billing ID: %s, User ID: %s, Role ID: %s, Role Name: %s, Team ID: %s\n", billingId, userId, roleId, roleName, teamId)
+			}
+		}
+	}
+
+	return nil
+}
+
+func fetchAndInsertUserRoles(sourceDB, destDB *sql.DB) error {
+	query := `SELECT u.id AS user_id, ba.id AS billing_id, utm.team_id, r.name AS role_name
+              FROM users u
+              JOIN billing_account ba ON u.billing_id = ba.id
+              JOIN users_role ur ON u.id = ur.user_id
+              JOIN roles r ON ur.role_id = r.id
+              JOIN user_team_mapping utm ON u.id = utm.user_id`
+	rows, err := sourceDB.Query(query)
+	if err != nil {
+		return fmt.Errorf("error fetching user roles data: %v", err)
+	}
+	defer rows.Close()
+
+	// log.Println("Preparing statement for inserting into user_roles_mapping in destDB...")
+	insertStmt, err := destDB.Prepare(`INSERT INTO user_roles_mapping (user_id, role_id) VALUES (?, ?)`)
+	if err != nil {
+		return fmt.Errorf("error preparing insert statement: %v", err)
+	}
+	defer insertStmt.Close()
+
+	for rows.Next() {
+		var userId, billingId, teamId, roleName string
+		if err := rows.Scan(&userId, &billingId, &teamId, &roleName); err != nil {
+			return fmt.Errorf("error scanning user roles data: %v", err)
+		}
+
+		roleName = transformRoleName(roleName)
+
+		var roleId string
+		roleQuery := `SELECT id FROM roles WHERE name = ? AND billing_id = ?`
+		if roleName == "BI_ADMIN" {
+			err = destDB.QueryRow(roleQuery, roleName, billingId).Scan(&roleId)
+		} else {
+			roleQuery += " AND team_id = ?"
+			err = destDB.QueryRow(roleQuery, roleName, billingId, teamId).Scan(&roleId)
+		}
+		if err != nil {
+			return fmt.Errorf("error fetching role id for role name %s with billing_id %s: %v", roleName, billingId, err)
+		}
+
+		log.Printf("Inserting into user_roles_mapping: UserID: %s, RoleID: %s", userId, roleId)
+		if _, err := insertStmt.Exec(userId, roleId); err != nil {
+			return fmt.Errorf("error inserting into user_roles_mapping: %v", err)
+		}
+	}
+
+	log.Println("Successfully fetched and inserted user roles information.")
+	return nil
+}
+
+func transformRoleName(sourceRoleName string) string {
+	switch sourceRoleName {
+	case "USER":
+		return "PLATFORM_READ_ONLY"
+	case "TEAM_ADMIN":
+		return "PLATFORM_ADMIN"
+	default:
+		return sourceRoleName
+	}
+}
 func getTableSchema(db *sql.DB, tableName string) (string, error) {
 	// Retrieve column definitions
 	columns, err := getColumnDefinitions(db, tableName)
@@ -170,7 +316,7 @@ func getTableSchema(db *sql.DB, tableName string) (string, error) {
 
 	// Check if the table is 'roles' and modify the schema accordingly
 	if tableName == "roles" {
-		additionalColumns := ", `created_by` varchar(255), `updated_by` varchar(255), `type` enum('BILLING', 'STANDARD', 'CUSTOM') NOT NULL DEFAULT 'STANDARD', `team_id` char(36)"
+		additionalColumns := ", `created_by` varchar(255), `updated_by` varchar(255), `type` enum('BILLING', 'STANDARD', 'CUSTOM') NOT NULL DEFAULT 'STANDARD', `team_id` char(36), `billing_id` char(36)"
 		columns += additionalColumns
 	}
 
