@@ -30,7 +30,7 @@ func main() {
 	}
 	defer destDB.Close()
 
-	tables := []string{"timezones", "billing_account", "team", "users", "roles", "master_encryption_keys", "license_table", "tenant_encryption_keys", "master_plan_table", "tenant_plan_table", "license_store_table"}
+	tables := []string{"timezones", "billing_account", "team", "users", "roles", "master_encryption_keys", "license_table", "tenant_encryption_keys", "master_plan_table", "tenant_plan_table", "license_store_table", "app_groups", "apps"}
 	for _, table := range tables {
 		log.Printf("Starting migration for table: %s", table)
 		err := migrateTable(sourceDB, destDB, table)
@@ -67,6 +67,17 @@ func migrateTable(sourceDB, destDB *sql.DB, tableName string) error {
 	schema, err := getTableSchema(sourceDB, tableName)
 	if err != nil {
 		return fmt.Errorf("error getting schema for table %s: %v", tableName, err)
+	}
+
+	if tableName == "apps" || tableName == "app_groups" {
+		additionalColumns := ", `created_by` varchar(255), `updated_by` varchar(255)"
+		schema += additionalColumns
+	}
+
+	if tableName == "apps" {
+		// Rename 'key' to 'key_value' and 'label' to 'label_value'
+		schema = strings.Replace(schema, "`key`", "`key_value`", 1)
+		schema = strings.Replace(schema, "`label`", "`label_value`", 1)
 	}
 
 	// log.Printf("Creating table %s in destination database with schema: %s", tableName, schema)
