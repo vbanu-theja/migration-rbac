@@ -32,7 +32,7 @@ func main() {
 
 	tables := []string{"timezones", "billing_account", "team", "users", "roles", "master_encryption_keys", "license_table", "tenant_encryption_keys", "master_plan_table", "tenant_plan_table", "license_store_table", "app_groups", "apps"}
 	for _, table := range tables {
-		log.Printf("Starting migration for table: %s", table)
+		log.Printf("Starting migration for table: %s", table) //add logs for each table row, check source and destination rows count pre and post migration
 		err := migrateTable(sourceDB, destDB, table)
 		if err != nil {
 			log.Fatalf("Failed to migrate table %s: %v", table, err)
@@ -46,6 +46,7 @@ func main() {
 		log.Fatalf("Failed to insert roles for teams: %v", err)
 	}
 	log.Println("Successfully inserted roles for all teams.")
+	log.Println(" ")
 
 	// if err := fetchAndDisplayUserRoles(sourceDB); err != nil {
 	// 	log.Fatalf("Failed to fetch user roles information: %v", err)
@@ -105,7 +106,10 @@ func migrateTable(sourceDB, destDB *sql.DB, tableName string) error {
 	}
 
 	insertStmt := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", tableName, joinColumns(columns), placeholders(len(columns)))
+	sourceCount := 0
+	insertCount := 0
 	for rows.Next() {
+		sourceCount++
 		err = rows.Scan(valuePtrs...)
 		if err != nil {
 			return fmt.Errorf("error scanning data from table %s: %v", tableName, err)
@@ -115,7 +119,11 @@ func migrateTable(sourceDB, destDB *sql.DB, tableName string) error {
 		if err != nil {
 			return fmt.Errorf("error inserting data into table %s: %v", tableName, err)
 		}
+		insertCount++
 	}
+
+	log.Printf("Migrated %d records from source table %s.", sourceCount, tableName)
+	log.Printf("Inserted %d records into destination table %s.", insertCount, tableName)
 
 	return nil
 }
@@ -182,7 +190,11 @@ func insertRole(stmt *sql.Stmt, name string, roleType string, teamId *string, bi
 	}
 
 	rowsAffected, _ := result.RowsAffected()
-	log.Printf("Inserted role: %s, Type: %s, Team ID: %v, Rows affected: %d\n", name, roleType, teamId, rowsAffected)
+	teamIdValue := "<nil>"
+	if teamId != nil {
+		teamIdValue = *teamId
+	}
+	log.Printf("Inserted role: %s, Type: %s, Team ID: %v, Rows affected: %d\n", name, roleType, teamIdValue, rowsAffected)
 	return nil
 }
 
