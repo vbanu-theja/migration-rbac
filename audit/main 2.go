@@ -12,7 +12,7 @@ import (
 	"github.com/joho/godotenv"
 )
 
-func main() {
+func main1() {
 	err := godotenv.Load()
 	if err != nil {
 		log.Fatal("Error loading .env file")
@@ -30,7 +30,7 @@ func main() {
 	}
 	defer destDB.Close()
 
-	tables := []string{"timezones", "billing_account", "team", "users", "roles", "master_encryption_keys", "license_table", "tenant_encryption_keys", "master_plan_table", "tenant_plan_table", "license_store_table", "app_groups", "apps", "audit_logs"}
+	tables := []string{"timezones", "billing_account", "team", "users", "roles", "master_encryption_keys", "license_table", "tenant_encryption_keys", "master_plan_table", "tenant_plan_table", "license_store_table", "app_groups", "audit_logs"} //AUDIT_LOG needs to added
 	for _, table := range tables {
 		log.Printf("Starting migration for table: %s", table) //add logs for each table row, check source and destination rows count pre and post migration
 		err := migrateTable(sourceDB, destDB, table)
@@ -64,8 +64,8 @@ func main() {
 
 func migrateTable(sourceDB, destDB *sql.DB, tableName string) error {
 	log.Printf("Retrieving schema for table: %s", tableName)
-	destinationTableName := tableName
 
+	destinationTableName := tableName
 	schema, err := getTableSchema(sourceDB, tableName)
 	if err != nil {
 		return fmt.Errorf("error getting schema for table %s: %v", tableName, err)
@@ -97,21 +97,21 @@ func migrateTable(sourceDB, destDB *sql.DB, tableName string) error {
 			"PRIMARY KEY (`id`)"
 	}
 
+	// log.Printf("Creating table %s in destination database with schema: %s", tableName, schema)
 	_, err = destDB.Exec(fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (%s)", destinationTableName, schema))
 	if err != nil {
 		return fmt.Errorf("error creating table %s in destination database: %v", tableName, err)
 	}
 
 	log.Printf("Migrating data for table: %s", tableName)
-	var query string
-	if tableName == "apps" {
-		query = "SELECT id, `key` AS key_value, label AS label_value, group_id, created_at, updated_at FROM apps"
-	} else if tableName == "audit_logs" {
-		query = "SELECT admin_id AS actor, action AS operation, target AS entity_type, 'ADMIN' AS actor_type, target_id AS entity_id, created_at AS modified_date, target_info AS entity_info FROM audit_logs"
-	} else {
-		query = fmt.Sprintf("SELECT * FROM %s", tableName)
+	selectQuery := fmt.Sprintf("SELECT * FROM %s", tableName)
+
+	if tableName == "audit_logs" {
+		selectQuery = fmt.Sprintf("SELECT admin_id AS actor, action AS operation, target AS entity_type, 'ADMIN' AS actor_type,"+
+			"target_id AS entity_id, created_at AS modified_date, target_info AS entity_info FROM %s", tableName)
 	}
-	rows, err := sourceDB.Query(query)
+
+	rows, err := sourceDB.Query(selectQuery)
 	if err != nil {
 		return fmt.Errorf("error querying data from table %s: %v", tableName, err)
 	}
@@ -120,16 +120,6 @@ func migrateTable(sourceDB, destDB *sql.DB, tableName string) error {
 	columns, err := rows.Columns()
 	if err != nil {
 		return fmt.Errorf("error retrieving columns from table %s: %v", tableName, err)
-	}
-
-	if tableName == "apps" {
-		for i, col := range columns {
-			if col == "key" {
-				columns[i] = "key_value"
-			} else if col == "label" {
-				columns[i] = "label_value"
-			}
-		}
 	}
 
 	values := make([]interface{}, len(columns))
@@ -317,7 +307,7 @@ func fetchAndInsertUserRoles(sourceDB, destDB *sql.DB) error {
 	defer rows.Close()
 
 	// log.Println("Preparing statement for inserting into user_roles_mapping in destDB...")
-	insertStmt, err := destDB.Prepare(`INSERT IGNORE INTO user_roles_mapping (user_id, role_id) VALUES (?, ?)`)
+	insertStmt, err := destDB.Prepare(`INSERT INTO user_roles_mapping (user_id, role_id) VALUES (?, ?)`)
 	if err != nil {
 		return fmt.Errorf("error preparing insert statement: %v", err)
 	}
@@ -340,12 +330,7 @@ func fetchAndInsertUserRoles(sourceDB, destDB *sql.DB) error {
 			err = destDB.QueryRow(roleQuery, roleName, billingId, teamId).Scan(&roleId)
 		}
 		if err != nil {
-			if err == sql.ErrNoRows {
-				log.Printf("No role found for Role Name: %s, Billing ID: %s, Team ID: %s. Skipping insertion.", roleName, billingId, teamId)
-				continue
-			} else {
-				return fmt.Errorf("error fetching role id for role name %s with billing_id %s and team_id %s: %v", roleName, billingId, teamId, err)
-			}
+			return fmt.Errorf("error fetching role id for role name %s with billing_id %s: %v", roleName, billingId, err)
 		}
 
 		log.Printf("Inserting into user_roles_mapping: UserID: %s, RoleID: %s", userId, roleId)
