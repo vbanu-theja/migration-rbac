@@ -76,6 +76,10 @@ func migrateTable(sourceDB, destDB *sql.DB, tableName string) error {
 		schema += additionalColumns
 	}
 
+	if tableName == "app_groups" {
+		schema += ", `team_id` CHAR(36)"
+	}
+
 	if tableName == "apps" {
 		// Rename 'key' to 'key_value' and 'label' to 'label_value'
 		schema = strings.Replace(schema, "`key`", "`key_value`", 1)
@@ -108,6 +112,8 @@ func migrateTable(sourceDB, destDB *sql.DB, tableName string) error {
 		query = "SELECT id, `key` AS key_value, label AS label_value, group_id, created_at, updated_at FROM apps"
 	} else if tableName == "audit_logs" {
 		query = "SELECT admin_id AS actor, action AS operation, target AS entity_type, 'ADMIN' AS actor_type, target_id AS entity_id, created_at AS modified_date, target_info AS entity_info FROM audit_logs"
+	} else if tableName == "app_groups" {
+		query = `SELECT ag.id, ag.name, ag.user_id, ag.created_at, ag.updated_at, utm.team_id FROM app_groups ag LEFT JOIN user_team_mapping utm ON ag.user_id = utm.user_id`
 	} else {
 		query = fmt.Sprintf("SELECT * FROM %s", tableName)
 	}
@@ -408,6 +414,10 @@ func getTableSchema(db *sql.DB, tableName string) (string, error) {
 	// Add a foreign key for 'roles' table specifically
 	if tableName == "roles" {
 		foreignKeys = append(foreignKeys, "CONSTRAINT `fk_roles_team_id` FOREIGN KEY (`team_id`) REFERENCES `team` (`id`)")
+	}
+
+	if tableName == "app_groups" {
+		foreignKeys = append(foreignKeys, "CONSTRAINT `fk_app_groups_team_id` FOREIGN KEY (`team_id`) REFERENCES `team` (`id`)")
 	}
 
 	// Construct the full table schema
