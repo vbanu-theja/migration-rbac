@@ -30,7 +30,7 @@ func main() {
 	}
 	defer destDB.Close()
 
-	tables := []string{"timezones", "billing_account", "team", "users", "roles", "master_encryption_keys", "license_table", "tenant_encryption_keys", "master_plan_table", "tenant_plan_table", "license_store_table", "app_groups", "apps", "audit_logs"}
+	tables := []string{"timezones", "admins", "billing_account", "team", "users", "roles", "master_encryption_keys", "license_table", "tenant_encryption_keys", "master_plan_table", "tenant_plan_table", "license_store_table", "app_groups", "apps", "audit_logs"}
 	for _, table := range tables {
 		log.Printf("Starting migration for table: %s", table) //add logs for each table row, check source and destination rows count pre and post migration
 		err := migrateTable(sourceDB, destDB, table)
