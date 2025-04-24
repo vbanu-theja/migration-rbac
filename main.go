@@ -111,7 +111,7 @@ func migrateTable(sourceDB, destDB *sql.DB, tableName string) error {
 	if tableName == "apps" {
 		query = "SELECT id, `key` AS key_value, label AS label_value, group_id, created_at, updated_at FROM apps"
 	} else if tableName == "audit_logs" {
-		query = "SELECT admin_id AS actor, action AS operation, target AS entity_type, 'ADMIN' AS actor_type, target_id AS entity_id, created_at AS modified_date, target_info AS entity_info FROM audit_logs"
+		query = "SELECT a.email_id AS actor, al.action AS operation, al.target AS entity_type, 'ADMIN' AS actor_type, al.target_id AS entity_id, al.created_at AS modified_date, al.target_info AS entity_info FROM audit_logs al LEFT JOIN admins a ON a.id = al.admin_id"
 	} else if tableName == "app_groups" {
 		query = `SELECT ag.id, ag.name, ag.user_id, ag.created_at, ag.updated_at, utm.team_id FROM app_groups ag LEFT JOIN user_team_mapping utm ON ag.user_id = utm.user_id`
 	} else {
